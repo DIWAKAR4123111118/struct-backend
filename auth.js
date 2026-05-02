@@ -38,34 +38,58 @@ function createAuthHandlers(pool) {
           JWT_SECRET,
           { expiresIn: '7d' }
         );
-        res.json({ token });
+        return res.json({ token });
       } catch (e) {
-        await client.query('ROLLBACK');
-        console.error(e);
-        res.status(500).json({ error: 'Signup failed' });
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('Signup error:', e);
+        return res.status(500).json({ error: 'Signup failed' });
       } finally {
         client.release();
       }
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Server error' });
+      console.error('Signup outer error:', err);
+      return res.status(500).json({ error: 'Server error' });
     }
   }
 
   async function login(req, res) {
     try {
+      console.log('[/auth/login] body:', req.body);
+
       const { email, password } = req.body;
+
+      if (!email || !password) {
+        console.log('[/auth/login] missing email or password');
+        return res.status(400).json({ error: 'Missing credentials' });
+      }
 
       const userRes = await pool.query(
         'SELECT * FROM users WHERE email=$1',
         [email]
       );
+      console.log('[/auth/login] userRes.rowCount:', userRes.rowCount);
+
       if (userRes.rowCount === 0) {
+        console.log('[/auth/login] no user for email:', email);
         return res.status(400).json({ error: 'Invalid credentials' });
       }
 
       const user = userRes.rows[0];
+      console.log('[/auth/login] user:', {
+        id: user.id,
+        contractor_id: user.contractor_id,
+        role: user.role,
+        hasPasswordHash: !!user.password_hash,
+      });
+
+      if (!user.password_hash) {
+        console.error('[/auth/login] user.password_hash is null/undefined');
+        return res.status(500).json({ error: 'Server error' });
+      }
+
       const match = await bcrypt.compare(password, user.password_hash);
+      console.log('[/auth/login] password match:', match);
+
       if (!match) {
         return res.status(400).json({ error: 'Invalid credentials' });
       }
@@ -75,10 +99,12 @@ function createAuthHandlers(pool) {
         JWT_SECRET,
         { expiresIn: '7d' }
       );
-      res.json({ token });
+      console.log('[/auth/login] token created');
+
+      return res.json({ token });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Server error' });
+      console.error('[/auth/login] ERROR:', err);
+      return res.status(500).json({ error: 'Server error' });
     }
   }
 
