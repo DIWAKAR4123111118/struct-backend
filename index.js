@@ -263,26 +263,68 @@ app.post('/approvals', authMiddleware, async (req, res) => {
 // ---------- Costs ----------
 app.post('/costs', authMiddleware, async (req, res) => {
   try {
-    const { activity_id, labour_hours, labour_rate, material_amount, other_amount, revenue } = req.body;
-    const lh = labour_hours || 0;
-    const lr = labour_rate || 0;
-    const ma = material_amount || 0;
-    const oa = other_amount || 0;
-    const rv = revenue || 0;
+    console.log('[/costs] body:', req.body);
+
+    const {
+      activity_id,
+      labour_hours,
+      labour_rate,
+      material_amount,
+      other_amount,
+      revenue,
+    } = req.body;
+
+    if (!activity_id) {
+      console.error('[/costs] missing activity_id');
+      return res.status(400).json({ error: 'activity_id is required' });
+    }
+
+    const lh = Number(labour_hours) || 0;
+    const lr = Number(labour_rate) || 0;
+    const ma = Number(material_amount) || 0;
+    const oa = Number(other_amount) || 0;
+    const rv = Number(revenue) || 0;
+
     const labour_amount = lh * lr;
     const total_cost = labour_amount + ma + oa;
     const profit = rv - total_cost;
     const profit_percent = rv > 0 ? (profit / rv) * 100 : null;
 
+    console.log('[/costs] calculated:', {
+      activity_id,
+      lh,
+      lr,
+      ma,
+      oa,
+      rv,
+      labour_amount,
+      total_cost,
+      profit,
+      profit_percent,
+    });
+
     const result = await pool.query(
-      `INSERT INTO costs(activity_id,labour_hours,labour_rate,labour_amount,
-                         material_amount,other_amount,total_cost,revenue,profit,profit_percent)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO costs(
+         activity_id,
+         labour_hours,
+         labour_rate,
+         labour_amount,
+         material_amount,
+         other_amount,
+         total_cost,
+         revenue,
+         profit,
+         profit_percent
+       )
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       RETURNING *`,
       [activity_id, lh, lr, labour_amount, ma, oa, total_cost, rv, profit, profit_percent]
     );
+
+    console.log('[/costs] inserted row id:', result.rows[0]?.id);
     res.json(result.rows[0]);
   } catch (e) {
-    console.error(e);
+    console.error('[/costs] ERROR:', e);
     res.status(500).json({ error: 'Failed to save cost' });
   }
 });
