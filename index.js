@@ -5,6 +5,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const createAuthHandlers = require('./auth');
+const PDFDocument = require('pdfkit'); // <-- ADD THIS LINE
 
 const app = express();
 
@@ -172,7 +173,7 @@ app.get('/activities/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// ---------- PRINT ROUTE ----------
+// ---------- PRINT ROUTE (PDF DOWNLOAD) ----------
 app.get('/activities/:id/print', authMiddleware, async (req, res) => {
   const { contractorId } = req.user;
   const { id } = req.params;
@@ -185,7 +186,9 @@ app.get('/activities/:id/print', authMiddleware, async (req, res) => {
        WHERE a.id=$1 AND a.contractor_id=$2`,
       [id, contractorId]
     );
-    if (activityRes.rowCount === 0) return res.status(404).send('Not found');
+    if (activityRes.rowCount === 0) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
 
     const approvalsRes = await pool.query(
       `SELECT * FROM approvals WHERE activity_id=$1`,
@@ -197,45 +200,81 @@ app.get('/activities/:id/print', authMiddleware, async (req, res) => {
     );
 
     const a = activityRes.rows[0];
-    const cost = costRes.rows[0];
+    const cost = costRes.rows[0] || null;
 
-    res.send(`
-      <html>
-      <head><title>Activity ${a.title}</title></head>
-      <body>
-        <h1>${a.title}</h1>
-        <p><strong>Site:</strong> ${a.site_name}</p>
-        <p><strong>Location:</strong> ${a.location || ''}</p>
-        <p><strong>Trade:</strong> ${a.trade || ''}</p>
-        <p><strong>Description:</strong> ${a.description || ''}</p>
+    // Configure response headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="activity-${id}.pdf"`
+    );
 
-        <h2>Approvals</h2>
-        ${
-          approvalsRes.rows
-            .map(
-              ap =>
-                `<p>Approved at ${ap.created_at || ''} - ${ap.comment || ''}</p>`
-            )
-            .join('')
-        }
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
 
-        <h2>Cost & Profit</h2>
-        ${
-          cost
-            ? `
-          <p>Total cost: ₹${cost.total_cost}</p>
-          <p>Revenue: ₹${cost.revenue}</p>
-          <p>Profit: ₹${cost.profit}</p>
-          <p>Profit %: ${cost.profit_percent}</p>
-        `
-            : '<p>No cost data</p>'
-        }
-      </body>
-      </html>
-    `);
+    // Pipe PDF to HTTP response
+    doc.pipe(res);
+
+    // Title
+    doc.fontSize(18).text(`Activity #${a.id}: ${a.title}`, { underline: true });
+    doc.moveDown();
+
+    // Basic info
+    doc.fontSize(12).text(`Site: ${a.site_name || ''}`);
+    doc.text(`Location: ${a.location || ''}`);
+    doc.text(`Trade: ${a.trade || ''}`);
+    doc.text(`Status: ${a.status || ''}`);
+    doc.text(`Due date: ${a.due_date ? a.due_date.toISOString().slice(0, 10) : ''}`);
+    doc.moveDown();
+
+    // Description
+    doc.fontSize(12).text('Description:', { underline: true });
+    doc.moveDown(0.5);
+    doc.text(a.description || 'No description', { align: 'left' });
+    doc.moveDown();
+
+    // Approvals
+    doc.fontSize(12).text('Approvals:', { underline: true });
+    if (approvalsRes.rows.length === 0) {
+      doc.moveDown(0.5).text('No approvals');
+    } else {
+      approvalsRes.rows.forEach((ap, idx) => {
+        const createdAt = ap.created_at
+          ? new Date(ap.created_at).toLocaleString()
+          : '';
+        doc
+          .moveDown(0.5)
+          .text(
+            `${idx + 1}. ${createdAt} - ${ap.comment || ''}`,
+            { align: 'left' }
+          );
+      });
+    }
+    doc.moveDown();
+
+    // Cost & profit
+    doc.fontSize(12).text('Cost & Profit:', { underline: true });
+    if (!cost) {
+      doc.moveDown(0.5).text('No cost data');
+    } else {
+      doc.moveDown(0.5);
+      doc.text(`Labour hours: ${cost.labour_hours}`);
+      doc.text(`Labour rate: ₹${cost.labour_rate}`);
+      doc.text(`Labour amount: ₹${cost.labour_amount}`);
+      doc.text(`Material amount: ₹${cost.material_amount}`);
+      doc.text(`Other amount: ₹${cost.other_amount}`);
+      doc.text(`Total cost: ₹${cost.total_cost}`);
+      doc.text(`Revenue: ₹${cost.revenue}`);
+      doc.text(`Profit: ₹${cost.profit}`);
+      doc.text(
+        `Profit %: ${cost.profit_percent != null ? cost.profit_percent.toFixed(2) : ''}`
+      );
+    }
+
+    // Finalize PDF
+    doc.end();
   } catch (e) {
-    console.error(e);
-    res.status(500).send('Error');
+    console.error('[/activities/:id/print] ERROR:', e);
+    res.status(500).json({ error: 'Failed to generate PDF' });
   }
 });
 // ---------------------------
